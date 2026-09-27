@@ -63,7 +63,7 @@
         entry.fired = !!e.fired;
         return entry;
       });
-      if (!task.done && task.deadlineAt > Date.now()) task.schedule.push(makeEntry(task, task.deadlineAt + 15 * MIN, 'overdue'));
+      if (!task.done && task.deadlineAt > Date.now()) task.schedule.push(makeEntry(task, overdueAt(task), 'overdue'));
       return task;
     });
   }
@@ -73,8 +73,21 @@
   }
 
   // ── Scheduling (original algorithm, count scaled by attitude) ─
+  const SHORT_TASK = 3 * H;
+  const MIN_LEAD = 30 * 1000;   // shortest deadline we accept; ntfy needs ≥10s delay
+
   function scheduleFor(createdAt, deadlineAt, spice) {
     const range = SPICE[spice] || SPICE[2];
+    const span = deadlineAt - createdAt;
+    const count = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+    // Short tasks: you're clearly awake, so spread check-ins across the real time left, not the 9–22 day window.
+    if (span <= SHORT_TASK) {
+      const start = createdAt + Math.max(15 * 1000, Math.min(2 * MIN, span * 0.2));   // ≥15s so ntfy can queue it
+      const end = deadlineAt - Math.min(5 * MIN, span * 0.1);
+      const n = Math.max(1, Math.min(count, Math.floor((end - start) / (5 * MIN)) || 1));
+      const slot = (end - start) / n;
+      return Array.from({ length: n }, (_, i) => start + slot * (i + 0.15 + Math.random() * 0.7));
+    }
     const times = [];
     let dayCursor = new Date(createdAt);
     dayCursor.setHours(0, 0, 0, 0);
@@ -85,12 +98,13 @@
       winStart = Math.max(winStart.getTime(), createdAt + 2 * MIN);
       winEnd = Math.min(winEnd.getTime(), deadlineAt - 5 * MIN);
       if (winEnd > winStart) {
-        const count = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
         const slot = (winEnd - winStart) / count;   // one random time per slot, so they don't bunch up
         for (let i = 0; i < count; i++) times.push(winStart + slot * (i + 0.15 + Math.random() * 0.7));
       }
       dayCursor = new Date(dayEnd);
     }
+    // e.g. created 23:00, due 08:00 — no waking window in between, so one check-in shortly before the deadline
+    if (!times.length) times.push(deadlineAt - Math.min(30 * MIN, span / 4));
     return times.sort((a, b) => a - b);
   }
 
@@ -125,9 +139,12 @@
     return e;
   }
 
+  // "Deadline passed" check-in: 15 min after, or sooner for short tasks (1 min for a 4-min task)
+  function overdueAt(t) { return t.deadlineAt + Math.max(MIN, Math.min(15 * MIN, (t.deadlineAt - t.createdAt) / 4)); }
+
   function buildSchedule(t, from) {
     scheduleFor(from, t.deadlineAt, t.spice).forEach(time => t.schedule.push(makeEntry(t, time, 'nudge')));
-    t.schedule.push(makeEntry(t, t.deadlineAt + 15 * MIN, 'overdue'));
+    t.schedule.push(makeEntry(t, overdueAt(t), 'overdue'));
     t.schedule.sort((a, b) => a.time - b.time);
   }
 
@@ -317,7 +334,7 @@
     if (!settings.phone || t.done || e.fired || e.cancel) return false;
     if (t.blocked && e.kind !== 'blocked') return false;
     if (e.kind === 'nudge' && e.time > t.deadlineAt) return false;
-    return e.time > now + 20 * 1000 && e.time < now + HORIZON;
+    return e.time > now + 12 * 1000 && e.time < now + HORIZON;
   }
 
   async function sync() {
@@ -704,7 +721,7 @@
   function presets() {
     const now = new Date();
     const at = (days, h, m) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, m || 0, 0, 0); return d.getTime(); };
-    const out = [['In 1h', Date.now() + H], ['In 3h', Date.now() + 3 * H]];
+    const out = [['In 15m', Date.now() + 15 * MIN], ['In 1h', Date.now() + H], ['In 3h', Date.now() + 3 * H]];
     out.push(now.getHours() < 20 ? ['Tonight 21:00', at(0, 21)] : ['Tomorrow night', at(1, 21)]);
     out.push(['Tomorrow noon', at(1, 12)]);
     const toFri = (5 - now.getDay() + 7) % 7 || (now.getHours() < 18 ? 0 : 7);
@@ -746,7 +763,9 @@
     const name = $('#taskName').value.trim();
     const deadlineAt = new Date($('#taskDeadline').value).getTime();
     if (!name) { $('#addErr').textContent = 'Give it a name. Even a vague one.'; return; }
-    if (!deadlineAt || deadlineAt <= Date.now() + 5 * MIN) { $('#addErr').textContent = 'Pick a deadline in the future. Time travel is a separate app.'; return; }
+    if (!deadlineAt) { $('#addErr').textContent = 'Pick a deadline.'; return; }
+    if (deadlineAt <= Date.now()) { $('#addErr').textContent = 'That time already happened. Time travel is a separate app.'; return; }
+    if (deadlineAt < Date.now() + MIN_LEAD) { $('#addErr').textContent = 'Give me at least 30 seconds. I\'m fast, not psychic.'; return; }
     addTask(name, deadlineAt, addSpice);
     closeSheet();
     toast(settings.phone ? 'Locked in. Your phone will hear from me.' : 'Locked in. Turn on phone alerts so I can reach you anywhere.');

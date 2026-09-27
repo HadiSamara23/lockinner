@@ -44,7 +44,7 @@ How it gets data: whenever the board changes (and at least every 6h while the ap
 
 ## How it works
 
-- **Scheduling.** Each task gets random check-ins between 09:00 and 22:00, 1–3 / 2–4 / 3–6 per day for Mild / Spicy / Unhinged. The original v1 algorithm is kept, except each day is split into slots so check-ins don't bunch up. One extra "deadline passed" check-in fires 15 min after the deadline.
+- **Scheduling.** Tasks due within 3 hours get their check-ins spread across the actual time left, even at night, down to a 30-second deadline. Longer tasks get random check-ins between 09:00 and 22:00, 1–3 / 2–4 / 3–6 per day for Mild / Spicy / Unhinged. The original v1 algorithm is kept, except each day is split into slots so check-ins don't bunch up. One extra "deadline passed" check-in fires 15 min after the deadline.
 - **Delivery.** lockInner pre-schedules check-ins on ntfy.sh using delayed delivery, looking up to ~70h ahead (ntfy.sh allows 3 days max). Each check-in has a sequence ID, so marking a task done, blocking it or removing it deletes its queued pushes. When a task runs longer than the window, a final "Nag supply low" push reminds you to open the app so it can queue more.
 - **Notification buttons:**
   - **Done ✓** opens lockInner and marks the task done (with the celebration).
