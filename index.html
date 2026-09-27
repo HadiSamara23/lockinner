@@ -42,6 +42,14 @@
     <ul id="doneList" class="done-list"></ul>
   </section>
 
+  <section class="board archive" id="archiveSec" hidden>
+    <details>
+      <summary class="board-head"><h2>Archive</h2><span class="board-count mono" id="archiveCount"></span></summary>
+      <p class="archive-note voice">Nothing here is deleted. Restore it, or lock it in again.</p>
+      <ul id="archiveList" class="done-list"></ul>
+    </details>
+  </section>
+
   <section class="board log" id="logSec" hidden>
     <div class="board-head"><h2>Announcements</h2></div>
     <ol id="logList" class="log-list"></ol>
@@ -117,7 +125,7 @@
       <button type="button" data-spice="2">Spicy</button>
       <button type="button" data-spice="3">Unhinged</button>
     </div>
-    <button class="btn ghost danger" id="removeBtn">Remove task</button>
+    <button class="btn ghost" id="removeBtn">Archive task</button>
   </div>
 </section>
 
@@ -190,7 +198,9 @@
       </label>
       <div class="field">
         <span class="field-label">Backup</span>
+        <p class="backup-state" id="backupState"></p>
         <div class="row">
+          <button class="btn" id="restoreBtn">Restore from backup</button>
           <button class="btn" id="exportBtn">Export</button>
           <label class="btn">Import<input type="file" id="importFile" accept="application/json" hidden></label>
         </div>
@@ -198,6 +208,22 @@
     </div>
   </details>
   <div class="sheet-actions"><button class="btn primary" data-close>Done</button></div>
+</section>
+
+<!-- Restore -->
+<section class="sheet" id="restoreSheet" role="dialog" aria-modal="true" aria-labelledby="restoreTitle" hidden>
+  <div class="grab" aria-hidden="true"></div>
+  <h2 class="sheet-title" id="restoreTitle">Restore your board</h2>
+  <p class="voice sub">Your lockins are backed up automatically. Paste your topic and I'll bring them back. Nothing already here gets replaced.</p>
+  <label class="field">
+    <span class="field-label">Your topic (find it in the ntfy app, starts with li-)</span>
+    <input type="text" id="restoreTopic" class="mono" spellcheck="false" autocapitalize="off" autocomplete="off">
+  </label>
+  <p class="restore-status" id="restoreStatus" role="status"></p>
+  <div class="sheet-actions">
+    <button class="btn" id="restoreFind">Find backup</button>
+    <button class="btn primary" id="restoreGo" hidden>Restore lockins</button>
+  </div>
 </section>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

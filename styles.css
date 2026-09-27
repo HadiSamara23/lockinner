@@ -224,7 +224,20 @@ body {
 .done-item .dn { flex: 1; min-width: 0; }
 .done-item .dn b { display: block; font-weight: 600; text-decoration: line-through; text-decoration-color: var(--good); text-decoration-thickness: 2px; overflow-wrap: anywhere; }
 .done-item .dn span { font: 500 12px var(--f-mono); color: var(--dim); }
-.done-item .btn { min-height: 36px; padding: 0 10px; font-size: 13px; }
+.done-item .btn { min-height: 40px; padding: 0 10px; font-size: 13px; flex: none; }
+.done-item .btn.icon { width: 40px; padding: 0; font-size: 16px; }
+.done-item .btn.again { background: var(--sign); color: var(--on-sign); border-color: var(--sign); font-weight: 800; }
+.done-item .check.dim { opacity: .7; }
+.done-item .dn b.plain { text-decoration: none; }
+.more-row { padding: 10px 0; text-align: center; }
+.archive details > summary { list-style: none; cursor: pointer; min-height: 44px; align-items: center; }
+.archive details > summary::-webkit-details-marker { display: none; }
+.archive details > summary h2::after { content: ' ▸'; }
+.archive details[open] > summary h2::after { content: ' ▾'; }
+.archive-note { margin: 0 2px 6px; color: var(--dim); }
+.restore-link { margin-top: 14px; min-height: 44px; text-decoration: underline; text-underline-offset: 3px; }
+.backup-state, .restore-status { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.45; }
+.restore-status:empty { display: none; }
 
 /* ── Log ──────────────────────────────── */
 .log-item { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 11px 2px; border-bottom: 1px solid var(--line); animation: arrive .4s var(--ease-out) both; }
@@ -284,7 +297,7 @@ input[type="text"], input[type="url"], input[type="datetime-local"] {
   background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px;
   -webkit-appearance: none; appearance: none;
 }
-input[type="datetime-local"] { font-family: var(--f-mono); font-size: 16px; }
+input[type="datetime-local"], input.mono { font-family: var(--f-mono); font-size: 16px; }
 input:focus { border-color: var(--text); outline: none; }
 input::placeholder { color: var(--dim); opacity: .8; }
 

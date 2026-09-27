@@ -69,12 +69,27 @@ The app is served at `https://<user>.github.io/lockinner/`. The notification lin
 
 Run locally: `python3 -m http.server 5174`, then open http://localhost:5174.
 
+## Your lockins are never deleted
+
+- **No delete button anywhere.** "Archive" hides a lockin and stops its check-ins. The Archive section at the bottom restores it with one tap.
+- **↻ Again** on any departed or archived lockin re-adds it with the same name, attitude and length, starting now. It's one tap.
+- **Import merges** a backup file into your board and never replaces anything.
+- **Automatic off-device backup.** While phone alerts are on, every change is backed up to `<topic>-b` on ntfy, in chunks so any size fits. ntfy only keeps it 12h, so the **widget** copies it into **iCloud Drive → Scriptable → lockInner backups/** on every refresh: `latest.json` plus one dated file per day, never deleted. If ntfy's copy has expired, the widget re-posts it.
+- **If Safari wipes your data** (Safari clears a site's storage after ~7 days of not visiting it, or when you clear website data):
+  1. Open lockInner and tap **Lost your board? Restore it**.
+  2. Paste your topic (it's the channel name in the ntfy app).
+  3. Tap **Find backup** → **Restore lockins**.
+
+  Your topic, phone alerts and upcoming check-ins all come back.
+- **Save failures are loud.** If the browser refuses to save, lockInner trims only history (old check-in times, old log lines, never a lockin), retries, and tells you to export if that still fails.
+- lockInner also asks the browser to mark its storage as persistent.
+
 ## Data & privacy
 
 - Tasks, the log and settings are stored in localStorage (`lockinner_tasks_v2`, `lockinner_log_v2`, `lockinner_settings_v2`).
 - v1 data (`lockinner_tasks_v1`, `lockinner_log_v1`) is migrated automatically on first load, and the v1 keys are left untouched as a backup.
 - Task names and check-in text pass through ntfy.sh. Your random topic works like a password: anyone who knows it can read your nudges. To avoid ntfy.sh entirely, self-host ntfy and change the server under **More settings**.
-- **Export / Import** under More settings backs up and restores everything as JSON.
+- **Export / Import / Restore from backup** are under More settings. Import and restore only ever add lockins.
 
 ## Known limitations
 

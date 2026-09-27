@@ -21,7 +21,7 @@
   const $ = s => document.querySelector(s);
   const store = {
     get(k, f) { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : f; } catch (e) { return f; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
   };
 
   function randId(n) {
@@ -43,10 +43,39 @@
   if (tasks === null) tasks = migrateTasks(store.get(V1_TASKS, []));
   if (log === null) log = migrateLog(store.get(V1_LOG, []));
 
+  // Lockins are never deleted. If the browser refuses a write, shrink the bulky parts
+  // (old check-in history, log) and retry; if it still fails, say so loudly.
+  let saveWarned = false;
+  function writeAll() {
+    const a = store.set(K_TASKS, tasks), b = store.set(K_LOG, log), c = store.set(K_SET, settings);
+    return a && b && c;
+  }
   function save() {
-    store.set(K_TASKS, tasks);
-    store.set(K_LOG, log);
-    store.set(K_SET, settings);
+    if (writeAll()) return true;
+    compact();
+    if (writeAll()) return true;
+    if (!saveWarned && typeof toast === 'function') {
+      saveWarned = true;
+      toast('I couldn\'t save to this browser. Open Phone settings → Export now so nothing gets lost.');
+    }
+    return false;
+  }
+  // Drops only history, never a lockin: fired/cancelled check-ins of finished tasks, old replies, old log lines.
+  function compact() {
+    tasks.forEach(t => {
+      if (t.done || t.archivedAt) t.schedule = t.schedule.filter(e => e.pushed && !e.fired);
+      else t.schedule = t.schedule.filter(e => !(e.cancel && !e.pushed));
+      t.replies = (t.replies || []).slice(-20);
+    });
+    log = log.slice(0, 20);
+    settings.seen = settings.seen.slice(-100);
+  }
+  function isLive(t) { return !t.done && !t.archivedAt; }
+
+  function askPersist() {
+    try {
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
+    } catch (e) {}
   }
 
   // v1 → v2. The v1 keys are left in place as a backup.
@@ -251,11 +280,21 @@
     return t;
   }
 
-  function removeTask(id) {
+  // There is no delete. Archiving hides a lockin and stops its check-ins; restoring brings it back.
+  function archiveTask(id) {
     const t = tasks.find(x => x.id === id);
-    if (!t) return;
-    t.schedule.forEach(e => { if (e.pushed && !e.fired) settings.graveyard.push(e.seq); });
-    tasks = tasks.filter(x => x.id !== id);
+    if (!t || t.archivedAt) return;
+    t.archivedAt = Date.now();
+    cancelPending(t);
+    announce(t, '🗄 Archived', `"${t.name}" is in the archive. Restore it any time.`, 'system', false);
+    commit();
+  }
+  function unarchiveTask(id) {
+    const t = tasks.find(x => x.id === id);
+    if (!t || !t.archivedAt) return;
+    t.archivedAt = null;
+    if (!t.done && t.deadlineAt > Date.now()) { cancelPending(t); buildSchedule(t, Date.now()); }
+    announce(t, '↩️ Restored', `"${t.name}" is back.`, 'system', false);
     commit();
   }
 
@@ -268,7 +307,7 @@
         if (e.fired || e.cancel || e.time > now) return;
         e.fired = true;
         changed = true;
-        if (t.done || (t.blocked && e.kind !== 'blocked')) return;
+        if (!isLive(t) || (t.blocked && e.kind !== 'blocked')) return;
         const viaPhone = settings.phone && e.pushed;
         const stale = isInitialLoad && (now - e.time > 10 * MIN);
         if (stale && !viaPhone) return;
@@ -331,7 +370,7 @@
   }
 
   function wanted(t, e, now) {
-    if (!settings.phone || t.done || e.fired || e.cancel) return false;
+    if (!settings.phone || !isLive(t) || e.fired || e.cancel) return false;
     if (t.blocked && e.kind !== 'blocked') return false;
     if (e.kind === 'nudge' && e.time > t.deadlineAt) return false;
     return e.time > now + 12 * 1000 && e.time < now + HORIZON;
@@ -369,7 +408,7 @@
         }
       }
       // 3. "Refill" reminder at the edge of the 3-day window
-      const beyond = settings.phone && tasks.some(t => !t.done && !t.blocked && t.schedule.some(e => !e.fired && !e.cancel && e.time >= now + HORIZON));
+      const beyond = settings.phone && tasks.some(t => isLive(t) && !t.blocked && t.schedule.some(e => !e.fired && !e.cancel && e.time >= now + HORIZON));
       if (beyond && Math.abs(settings.refillAt - (now + HORIZON)) > 6 * H && budget-- > 0) {
         const v = VOICE.compose('refill', {});
         const r = await api('/', { method: 'POST', body: JSON.stringify({ topic: settings.topic, sequence_id: 'lirefill', title: v.title, message: v.text, delay: String(Math.floor((now + HORIZON - 30 * MIN) / 1000)), click: APP_URL }) });
@@ -380,6 +419,7 @@
       }
       if (budget <= 0) syncAgain = true;
       await publishWidget();
+      await publishBackup();
     } catch (err) {
       failed = true;
       console.warn('[lockInner] sync failed', err);
@@ -424,7 +464,7 @@
   // Only republished when something visible changed, or every 6h so ntfy's 12h cache never runs dry.
   function widgetSnapshot() {
     const now = Date.now();
-    const active = tasks.filter(t => !t.done).sort((a, b) => a.deadlineAt - b.deadlineAt).slice(0, 8);
+    const active = tasks.filter(isLive).sort((a, b) => a.deadlineAt - b.deadlineAt).slice(0, 8);
     const top = active[0];
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     return {
@@ -455,6 +495,74 @@
     widgetLine = { key: lineKey, line: snap.line };
     settings.widgetSig = sig; settings.widgetAt = Date.now(); settings.widgetLine = snap.line;
     save();
+  }
+
+  // Full backup of every lockin (active, done, archived) on <topic>-b, split to fit ntfy's 4 KB limit.
+  // ntfy only keeps it 12h; the Scriptable widget copies it into iCloud Drive and re-posts it when it expires.
+  function backupPayload() {
+    return {
+      v: 1, at: Date.now(),
+      t: tasks.map(t => [t.id, t.name, t.createdAt, t.deadlineAt, t.done ? 1 : 0, t.doneAt || 0, t.archivedAt || 0,
+        t.spice, t.streak || 0, t.blocked ? t.blocked.why : '', t.blocked ? t.blocked.since : 0])
+    };
+  }
+  function chunkForNtfy(str, max) {
+    const out = []; let cur = '', size = 0;
+    for (const ch of str) {
+      const cp = ch.codePointAt(0);
+      const b = cp < 0x20 || ch === '"' || ch === '\\' ? 6 : cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+      if (size + b > max && cur) { out.push(cur); cur = ''; size = 0; }
+      cur += ch; size += b;
+    }
+    out.push(cur);
+    return out;
+  }
+  async function publishBackup() {
+    if (!settings.phone || !tasks.length) return;
+    const b = backupPayload();
+    const sig = JSON.stringify(b.t);
+    if (sig === settings.backupSig && Date.now() - (settings.backupAt || 0) < 6 * H) return;
+    const id = String(b.at);
+    const parts = chunkForNtfy(JSON.stringify(b), 3000);
+    for (let i = 0; i < parts.length; i++) {
+      const r = await api('/', { method: 'POST', body: JSON.stringify({ topic: settings.topic + '-b', message: JSON.stringify({ lib: 1, id, i, n: parts.length, d: parts[i] }) }) });
+      if (!r.ok) throw new Error('backup ' + r.status);
+    }
+    settings.backupSig = sig; settings.backupAt = b.at;
+    save();
+  }
+  async function fetchBackup(topic, server) {
+    const r = await fetch((server || settings.server).replace(/\/+$/, '') + '/' + topic + '-b/json?poll=1&since=12h');
+    if (!r.ok) throw new Error('fetch ' + r.status);
+    const sets = {};
+    (await r.text()).split('\n').filter(Boolean).forEach(l => {
+      try {
+        const m = JSON.parse(l); if (m.event !== 'message') return;
+        const c = JSON.parse(m.message); if (c.lib !== 1) return;
+        (sets[c.id] = sets[c.id] || { n: c.n, parts: [] }).parts[c.i] = c.d;
+      } catch (e) {}
+    });
+    const ids = Object.keys(sets).filter(id => sets[id].parts.filter(p => p != null).length === sets[id].n).sort((a, b) => b - a);
+    for (const id of ids) {
+      try { const b = JSON.parse(sets[id].parts.join('')); if (b && Array.isArray(b.t)) return b; } catch (e) {}
+    }
+    return null;
+  }
+  // Merge a backup into the board: adds what's missing, never overwrites or removes anything.
+  function restoreBackup(b, topic) {
+    const now = Date.now();
+    const wasEmpty = !tasks.length;
+    let added = 0;
+    b.t.forEach(([id, name, createdAt, deadlineAt, done, doneAt, archivedAt, spice, streak, why, since]) => {
+      if (!id || !name || tasks.some(x => x.id === id)) return;
+      const t = { id, name, createdAt, deadlineAt, done: !!done, doneAt: doneAt || null, archivedAt: archivedAt || null,
+        spice: spice || 2, heat: 0, streak: streak || 0, snoozes: 0, replies: [], blocked: why ? { why, since } : null, seqN: 0, schedule: [] };
+      if (isLive(t) && deadlineAt > now) buildSchedule(t, now);
+      tasks.push(t); added++;
+    });
+    if (wasEmpty && topic) { settings.topic = topic; settings.phone = true; }
+    commit();
+    return added;
   }
 
   async function widgetScript() {
@@ -573,10 +681,10 @@
   function renderTasks() {
     const list = $('#taskList');
     const now = Date.now();
-    const active = tasks.filter(t => !t.done).sort((a, b) => a.deadlineAt - b.deadlineAt);
+    const active = tasks.filter(isLive).sort((a, b) => a.deadlineAt - b.deadlineAt);
     $('#depCount').textContent = active.length ? `${active.length} locked in` : '';
     if (!active.length) {
-      list.innerHTML = `<div class="empty"><p class="voice">The board is empty. Suspiciously relaxing.</p><p>Lock something in. I'll take it from there.</p></div>`;
+      list.innerHTML = `<div class="empty"><p class="voice">The board is empty. Suspiciously relaxing.</p><p>Lock something in. I'll take it from there.</p>${tasks.length ? '' : '<button class="btn ghost restore-link" data-act="restore">Lost your board? Restore it</button>'}</div>`;
       return;
     }
     list.innerHTML = active.map(t => cardHTML(t, now)).join('');
@@ -588,20 +696,33 @@
     tick();
   }
 
+  let showAllDone = false;
   function renderDone() {
-    const done = tasks.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    const done = tasks.filter(t => t.done && !t.archivedAt).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
     $('#departedSec').hidden = !done.length;
     $('#doneCount').textContent = done.length ? `${done.length} done` : '';
-    $('#doneList').innerHTML = done.slice(0, 20).map(t => {
+    const shown = showAllDone ? done : done.slice(0, 10);
+    $('#doneList').innerHTML = shown.map(t => {
       const diff = t.deadlineAt - t.doneAt;
       const rel = !t.doneAt ? 'departed' : `${fmtWhen(t.doneAt)} · ${diff >= 0 ? fmtLeft(diff) + ' early' : fmtLeft(diff) + ' late'}`;
       return `<li class="done-item" data-id="${t.id}">
         <span class="check" aria-hidden="true">✓</span>
         <div class="dn"><b>${esc(t.name)}</b><span>${rel}</span></div>
-        <button class="btn ghost" data-act="reopen">Reopen</button>
-        <button class="btn ghost danger" data-act="remove" aria-label="Remove">✕</button>
+        <button class="btn again" data-act="again">↻ Again</button>
+        <button class="btn ghost icon" data-act="reopen" aria-label="Reopen" title="Reopen">↩</button>
+        <button class="btn ghost icon" data-act="archive" aria-label="Archive" title="Archive">🗄</button>
       </li>`;
-    }).join('');
+    }).join('') + (done.length > 10 ? `<li class="more-row"><button class="btn ghost" data-act="more">${showAllDone ? 'Show fewer' : `Show all ${done.length}`}</button></li>` : '');
+
+    const arch = tasks.filter(t => t.archivedAt).sort((a, b) => b.archivedAt - a.archivedAt);
+    $('#archiveSec').hidden = !arch.length;
+    $('#archiveCount').textContent = arch.length;
+    $('#archiveList').innerHTML = arch.map(t => `<li class="done-item" data-id="${t.id}">
+        <span class="check dim" aria-hidden="true">🗄</span>
+        <div class="dn"><b class="plain">${esc(t.name)}</b><span>archived ${fmtWhen(t.archivedAt)}${t.done ? ' · was done' : ''}</span></div>
+        <button class="btn again" data-act="again">↻ Again</button>
+        <button class="btn ghost" data-act="unarchive">Restore</button>
+      </li>`).join('');
   }
 
   function renderLog() {
@@ -751,13 +872,23 @@
   let previewTimer;
   $('#taskName').addEventListener('input', () => { clearTimeout(previewTimer); previewTimer = setTimeout(renderSpice, 500); });
 
-  $('#addBtn').addEventListener('click', () => {
+  // prefill = { name, spice, span } from an earlier lockin: same name, attitude and length, starting now
+  function openAdd(prefill) {
     $('#addForm').reset();
     $('#addErr').textContent = '';
-    addSpice = 2;
-    renderPresets(); renderSpice();
+    addSpice = prefill ? prefill.spice || 2 : 2;
+    renderPresets();
+    if (prefill) {
+      $('#taskName').value = prefill.name;
+      const span = Math.max(15 * MIN, prefill.span || H);
+      $('#taskDeadline').value = toLocalInput(Math.ceil((Date.now() + span) / (5 * MIN)) * 5 * MIN);
+      $('#addTitle').textContent = 'Lock it in again?';
+    } else $('#addTitle').textContent = 'What are you locking in?';
+    renderSpice();
     openSheet('#addSheet');
-  });
+    if (prefill) setTimeout(() => $('#addForm button[type="submit"]').focus({ preventScroll: true }), 80);
+  }
+  $('#addBtn').addEventListener('click', () => openAdd());
   $('#addForm').addEventListener('submit', e => {
     e.preventDefault();
     const name = $('#taskName').value.trim();
@@ -767,6 +898,7 @@
     if (deadlineAt <= Date.now()) { $('#addErr').textContent = 'That time already happened. Time travel is a separate app.'; return; }
     if (deadlineAt < Date.now() + MIN_LEAD) { $('#addErr').textContent = 'Give me at least 30 seconds. I\'m fast, not psychic.'; return; }
     addTask(name, deadlineAt, addSpice);
+    askPersist();
     closeSheet();
     toast(settings.phone ? 'Locked in. Your phone will hear from me.' : 'Locked in. Turn on phone alerts so I can reach you anywhere.');
   });
@@ -816,24 +948,31 @@
   });
   $('#removeBtn').addEventListener('click', () => {
     const t = tasks.find(x => x.id === checkId); if (!t) return;
-    if (!confirm(`Remove "${t.name}"? Its scheduled check-ins are cancelled too.`)) return;
     closeSheet();
-    removeTask(t.id);
+    archiveTask(t.id);
+    toast('Archived, not deleted. It\'s at the bottom under Archive.');
   });
 
   // Card + departed list actions
   $('#taskList').addEventListener('click', e => {
+    if (e.target.closest('[data-act="restore"]')) { openRestore(); return; }
     const card = e.target.closest('.card'); if (!card) return;
     const act = e.target.closest('[data-act]');
     if (act && act.dataset.act === 'done') { celebrate(card.dataset.id, act); return; }
     openCheck(card.dataset.id);
   });
-  $('#doneList').addEventListener('click', e => {
+  function onListAction(e) {
     const b = e.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'more') { showAllDone = !showAllDone; renderDone(); return; }
     const id = b.closest('.done-item').dataset.id;
+    const t = tasks.find(x => x.id === id); if (!t) return;
+    if (b.dataset.act === 'again') openAdd({ name: t.name, spice: t.spice, span: t.deadlineAt - t.createdAt });
     if (b.dataset.act === 'reopen') { reply(id, 'reopen'); toast('Back on the board. I missed it, honestly.'); }
-    if (b.dataset.act === 'remove') removeTask(id);
-  });
+    if (b.dataset.act === 'archive') { archiveTask(id); toast('Archived. Restore it any time from the bottom of the page.'); }
+    if (b.dataset.act === 'unarchive') { unarchiveTask(id); toast('Restored. Welcome back.'); }
+  }
+  $('#doneList').addEventListener('click', onListAction);
+  $('#archiveList').addEventListener('click', onListAction);
 
   // Setup sheet
   function renderSetup() {
@@ -841,6 +980,9 @@
     $('#phoneSwitch').setAttribute('aria-checked', String(settings.phone));
     $('#phoneState').textContent = settings.phone ? `On · topic ${settings.topic}` : 'Off, nudges only fire while this tab is open';
     $('#serverUrl').value = settings.server;
+    $('#backupState').textContent = settings.phone
+      ? (settings.backupAt ? `Backed up to ntfy ${fmtWhen(settings.backupAt)}. The widget keeps a permanent copy in iCloud Drive.` : 'Backs up automatically once you have a lockin.')
+      : 'Turn phone alerts on to back up automatically.';
     $('#serverUrl').disabled = settings.phone;
     document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === settings.theme));
     const n = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
@@ -890,6 +1032,36 @@
     }
     setTimeout(() => { b.textContent = 'Copy widget script'; }, 2200);
   });
+  function openRestore() {
+    $('#restoreTopic').value = settings.topic;
+    $('#restoreStatus').textContent = '';
+    $('#restoreGo').hidden = true;
+    openSheet('#restoreSheet');
+  }
+  let foundBackup = null;
+  $('#restoreFind').addEventListener('click', async () => {
+    const topic = $('#restoreTopic').value.trim();
+    const st = $('#restoreStatus');
+    $('#restoreGo').hidden = true;
+    if (!/^li-[a-z0-9]+$/.test(topic)) { st.textContent = 'That doesn\'t look like a lockInner topic. It starts with "li-".'; return; }
+    st.textContent = 'Looking…';
+    try {
+      foundBackup = await fetchBackup(topic);
+      if (!foundBackup) { st.textContent = 'No backup on ntfy right now. If you use the widget, open Scriptable and run the lockInner script once, then try again. It re-posts your iCloud copy.'; return; }
+      const missing = foundBackup.t.filter(r => !tasks.some(x => x.id === r[0])).length;
+      st.textContent = `Found a backup from ${fmtWhen(foundBackup.at)} with ${foundBackup.t.length} lockin(s)` + (missing ? `, ${missing} missing here.` : ', all already on this board.');
+      $('#restoreGo').hidden = !missing;
+      $('#restoreGo').dataset.topic = topic;
+    } catch (e) { st.textContent = 'Couldn\'t reach ntfy. Check your connection and try again.'; }
+  });
+  $('#restoreGo').addEventListener('click', () => {
+    if (!foundBackup) return;
+    const n = restoreBackup(foundBackup, $('#restoreGo').dataset.topic);
+    closeSheet();
+    toast(`Restored ${n} lockin(s). Nothing was lost. Well, now.`);
+  });
+  $('#restoreBtn').addEventListener('click', () => { closeSheet(true); openRestore(); });
+
   $('#confirmPing').addEventListener('click', () => { $('#confirmPing').hidden = true; $('#pingTrouble').hidden = true; setPhone(true); toast('Phone alerts on. There\'s no escape now.'); });
   $('#phoneSwitch').addEventListener('click', () => setPhone(!settings.phone));
   $('#serverUrl').addEventListener('change', e => {
@@ -916,13 +1088,19 @@
     try {
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.tasks)) throw new Error('bad file');
-      if (!confirm(`Replace your board with ${data.tasks.length} task(s) from the backup?`)) return;
-      tasks.forEach(t => t.schedule.forEach(x => { if (x.pushed && !x.fired) settings.graveyard.push(x.seq); }));
-      tasks = data.tasks.map(t => Object.assign({ heat: 0, streak: 0, snoozes: 0, replies: [], blocked: null, seqN: 0, spice: 2 }, t, { schedule: (t.schedule || []).map(x => Object.assign({}, x, { pushed: false, dirty: false })) }));
-      log = Array.isArray(data.log) ? data.log : log;
-      if (data.settings && data.settings.topic) settings.topic = data.settings.topic;
+      const fresh = data.tasks.filter(t => t && t.id && t.name && !tasks.some(x => x.id === t.id));
+      if (!fresh.length) { toast('Everything in that backup is already on your board.'); e.target.value = ''; return; }
+      if (!confirm(`Add ${fresh.length} lockin(s) from the backup? Nothing on your board gets replaced.`)) { e.target.value = ''; return; }
+      const wasEmpty = !tasks.length;
+      fresh.forEach(t => tasks.push(Object.assign({ heat: 0, streak: 0, snoozes: 0, replies: [], blocked: null, seqN: 0, spice: 2, archivedAt: null }, t,
+        { schedule: (t.schedule || []).map(x => Object.assign({}, x, { pushed: false, dirty: false })) })));
+      if (Array.isArray(data.log)) {
+        const seenLog = new Set(log.map(l => l.time + l.body));
+        log = log.concat(data.log.filter(l => !seenLog.has(l.time + l.body))).sort((a, b) => b.time - a.time).slice(0, 40);
+      }
+      if (wasEmpty && data.settings && data.settings.topic) settings.topic = data.settings.topic;
       commit(); renderSetup();
-      toast('Backup restored. Where were we?');
+      toast(`Added ${fresh.length} lockin(s). Where were we?`);
     } catch (err) { toast('That file isn\'t a lockInner backup.'); }
     e.target.value = '';
   });
@@ -953,6 +1131,7 @@
   // ── Boot ─────────────────────────────────────────────────────
   applyTheme();
   save();
+  if (tasks.length) askPersist();
   const latest = log.find(l => l.kind !== 'system' && l.kind !== 'reply');
   if (latest) setTannoy(latest.body, false);
   renderAll();
@@ -969,5 +1148,5 @@
   });
 
   // Test hook (used by the verification script; harmless in production)
-  window.__lockinner = { get tasks() { return tasks; }, get settings() { return settings; }, sync, pollInbound, reply, checkNudges, widgetScript };
+  window.__lockinner = { get tasks() { return tasks; }, get settings() { return settings; }, sync, pollInbound, reply, checkNudges, widgetScript, fetchBackup, save };
 })();

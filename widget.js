@@ -45,6 +45,71 @@ async function loadBoard() {
   return board;
 }
 
+// ── Backup keeper ─────────────────────────────────────────────
+// lockInner posts a full backup of every lockin to <topic>-b, but ntfy only keeps it 12h.
+// Each run, copy the newest backup into iCloud Drive (Scriptable/lockInner backups/): latest.json
+// plus one dated file per day, never deleted. If ntfy's copy has expired, re-post ours so
+// "Restore from backup" in lockInner always has something to find.
+async function readBackup() {
+  const req = new Request(`${SERVER}/${TOPIC}-b/json?poll=1&since=12h`);
+  req.timeoutInterval = 8;
+  const sets = {};
+  (await req.loadString()).split('\n').filter(Boolean).forEach(l => {
+    try {
+      const m = JSON.parse(l); if (m.event !== 'message') return;
+      const c = JSON.parse(m.message); if (c.lib !== 1) return;
+      (sets[c.id] = sets[c.id] || { n: c.n, parts: [] }).parts[c.i] = c.d;
+    } catch (e) {}
+  });
+  const ids = Object.keys(sets).filter(id => sets[id].parts.filter(p => p != null).length === sets[id].n).sort((a, b) => b - a);
+  for (const id of ids) {
+    try { const b = JSON.parse(sets[id].parts.join('')); if (b && Array.isArray(b.t)) return b; } catch (e) {}
+  }
+  return null;
+}
+function chunkForNtfy(str, max) {
+  const out = []; let cur = '', size = 0;
+  for (const ch of str) {
+    const cp = ch.codePointAt(0);
+    const b = cp < 0x20 || ch === '"' || ch === '\\' ? 6 : cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (size + b > max && cur) { out.push(cur); cur = ''; size = 0; }
+    cur += ch; size += b;
+  }
+  out.push(cur);
+  return out;
+}
+async function keepBackup() {
+  if (!TOPIC.startsWith('li-')) return;
+  let fm;
+  try { fm = FileManager.iCloud(); } catch (e) { fm = FileManager.local(); }
+  const dir = fm.joinPath(fm.documentsDirectory(), 'lockInner backups');
+  if (!fm.fileExists(dir)) fm.createDirectory(dir, true);
+  const latestPath = fm.joinPath(dir, 'latest.json');
+  let local = null;
+  if (fm.fileExists(latestPath)) {
+    try { await fm.downloadFileFromiCloud(latestPath); } catch (e) {}
+    try { local = JSON.parse(fm.readString(latestPath)); } catch (e) {}
+  }
+  let remote = null;
+  try { remote = await readBackup(); } catch (e) { return; }   // offline: leave everything as is
+  if (remote && (!local || remote.at > local.at)) {
+    const json = JSON.stringify(remote);
+    fm.writeString(latestPath, json);
+    const d = new Date(remote.at);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    fm.writeString(fm.joinPath(dir, `lockinner-${day}.json`), json);
+  } else if (local && !remote) {
+    const id = String(Date.now());
+    const parts = chunkForNtfy(JSON.stringify(local), 3000);
+    for (let i = 0; i < parts.length; i++) {
+      const r = new Request(`${SERVER}/`);
+      r.method = 'POST';
+      r.body = JSON.stringify({ topic: TOPIC + '-b', message: JSON.stringify({ lib: 1, id, i, n: parts.length, d: parts[i] }) });
+      await r.loadString();
+    }
+  }
+}
+
 // ── Formatting ────────────────────────────────────────────────
 function fmtLeft(ms) {
   ms = Math.abs(ms);
@@ -230,6 +295,7 @@ function lockInline(w, b, t) {
 // ── Main ──────────────────────────────────────────────────────
 const family = config.widgetFamily || 'medium';
 const b = await loadBoard();
+try { await keepBackup(); } catch (e) { /* never let backups break the widget */ }
 const w = new ListWidget();
 const lock = family.startsWith('accessory');
 if (!lock) {
