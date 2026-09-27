@@ -92,7 +92,7 @@
         entry.fired = !!e.fired;
         return entry;
       });
-      if (!task.done && task.deadlineAt > Date.now()) task.schedule.push(makeEntry(task, overdueAt(task), 'overdue'));
+      if (!task.done && task.deadlineAt > Date.now()) task.schedule.push(makeEntry(task, task.deadlineAt, 'deadline'));
       return task;
     });
   }
@@ -168,12 +168,9 @@
     return e;
   }
 
-  // "Deadline passed" check-in: 15 min after, or sooner for short tasks (1 min for a 4-min task)
-  function overdueAt(t) { return t.deadlineAt + Math.max(MIN, Math.min(15 * MIN, (t.deadlineAt - t.createdAt) / 4)); }
-
   function buildSchedule(t, from) {
     scheduleFor(from, t.deadlineAt, t.spice).forEach(time => t.schedule.push(makeEntry(t, time, 'nudge')));
-    t.schedule.push(makeEntry(t, overdueAt(t), 'overdue'));
+    t.schedule.push(makeEntry(t, t.deadlineAt, 'deadline'));   // the rebuke, at the exact deadline, if not done
     t.schedule.sort((a, b) => a.time - b.time);
   }
 
@@ -364,7 +361,7 @@
       topic: settings.topic, sequence_id: e.seq,
       title: e.title, message: e.text,
       delay: String(Math.floor(e.time / 1000)),
-      priority: e.kind === 'overdue' || situation(t, e.time, e.kind) === 'close' ? 4 : 3,
+      priority: e.kind === 'deadline' ? 5 : e.kind === 'overdue' || situation(t, e.time, e.kind) === 'close' ? 4 : 3,
       click: linkFor(t), actions: actionsFor(t, 0)
     };
   }
@@ -889,13 +886,19 @@
     if (prefill) setTimeout(() => $('#addForm button[type="submit"]').focus({ preventScroll: true }), 80);
   }
   $('#addBtn').addEventListener('click', () => openAdd());
+  // Read "2026-09-28T00:15" as local wall-clock time. new Date(string) isn't safe here:
+  // some Safari versions treat it as UTC, which puts the deadline hours off.
+  function parseLocalInput(v) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v || '');
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() : NaN;
+  }
   $('#addForm').addEventListener('submit', e => {
     e.preventDefault();
     const name = $('#taskName').value.trim();
-    const deadlineAt = new Date($('#taskDeadline').value).getTime();
+    const deadlineAt = parseLocalInput($('#taskDeadline').value);
     if (!name) { $('#addErr').textContent = 'Give it a name. Even a vague one.'; return; }
     if (!deadlineAt) { $('#addErr').textContent = 'Pick a deadline.'; return; }
-    if (deadlineAt <= Date.now()) { $('#addErr').textContent = 'That time already happened. Time travel is a separate app.'; return; }
+    if (deadlineAt <= Date.now()) { $('#addErr').textContent = `${fmtWhen(deadlineAt)} already happened. It's ${fmtTime(Date.now())} now. Time travel is a separate app.`; return; }
     if (deadlineAt < Date.now() + MIN_LEAD) { $('#addErr').textContent = 'Give me at least 30 seconds. I\'m fast, not psychic.'; return; }
     addTask(name, deadlineAt, addSpice);
     askPersist();
@@ -1130,6 +1133,18 @@
 
   // ── Boot ─────────────────────────────────────────────────────
   applyTheme();
+  (function upgradeDeadlineRebukes() {
+    const now = Date.now();
+    tasks.forEach(t => {
+      if (!isLive(t) || t.deadlineAt <= now + 15 * 1000) return;
+      t.schedule.forEach(e => {
+        if (e.kind !== 'overdue' || e.fired || e.cancel) return;
+        e.kind = 'deadline'; e.time = t.deadlineAt;
+        writeEntry(t, e);
+        if (e.pushed) e.dirty = true;   // re-sent to ntfy under the same id, so it replaces the old one
+      });
+    });
+  })();
   save();
   if (tasks.length) askPersist();
   const latest = log.find(l => l.kind !== 'system' && l.kind !== 'reply');

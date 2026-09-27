@@ -245,6 +245,7 @@ body {
 .log-title { font: 600 12px var(--f-mono); color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
 .log-body { margin: 2px 0 0; font-size: 17px; }
 
+.ver { font-size: 11px; color: var(--dim); opacity: .6; margin: 0 0 4px; }
 .foot { color: var(--dim); font-size: 16px; max-width: 44ch; }
 
 /* ── Buttons ──────────────────────────── */

@@ -71,6 +71,27 @@ window.LI_VOICE = (function () {
         'The deadline for "{n}" is so close it can smell your excuses.'
       ]
     },
+    // Fires at the exact deadline if the lockin isn't done. The deadline is the one thing that matters: no softening.
+    deadline: {
+      1: [
+        'Deadline for "{n}" is now, and it isn\'t done. Finish it, or be honest and set a new one.',
+        '"{n}" was due just now. Not done. Let\'s close it out.',
+        'Time\'s up on "{n}". Still open. What\'s the plan?'
+      ],
+      2: [
+        'Time\'s up on "{n}". You said this mattered. It\'s not done.',
+        '"{n}": deadline, right now. Not done. Explain yourself (by finishing it).',
+        'That was the deadline for "{n}". The one you picked. Yourself.',
+        'Deadline hit. "{n}" is still sitting there. Awkward.'
+      ],
+      3: [
+        'DEADLINE. "{n}". NOT DONE. I\'m not mad, I\'m just deeply, deeply disappointed.',
+        'You had one job: "{n}". The clock just ran out on it.',
+        '"{n}" missed its deadline. Future you just filed a complaint.',
+        'Time\'s up. "{n}" is officially late. Your excuses are not on the board.',
+        'The deadline for "{n}" came and went. So did your credibility. Fix it.'
+      ]
+    },
     overdue: {
       1: ['The deadline for "{n}" just passed. Want to set a new one, or wrap it up now?'],
       2: ['"{n}" missed its train. Next one leaves when you open the app.', 'Deadline for "{n}": gone. Dignity: recoverable. Tap in.'],
@@ -127,6 +148,7 @@ window.LI_VOICE = (function () {
     early: ['📢 Platform announcement', '🎙️ A word from your coach', '🚉 Service update'],
     mid: ['📢 Platform announcement', '🕰️ Halfway mark', '🎙️ Coach, again'],
     close: ['⏰ Boarding now', '🚨 Final call'],
+    deadline: ['⛔ Deadline hit', '🚨 Time\'s up', '⛔ Not done. Deadline.'],
     overdue: ['🧯 Delayed service'],
     notyet: ['🐌 Checking back'],
     snoozed: ['😴 Snooze report'],
