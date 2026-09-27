@@ -148,6 +148,18 @@
     </li>
   </ol>
 
+  <div class="widget-box">
+    <div class="widget-head"><b>Home &amp; Lock Screen widget</b><span class="mono">optional</span></div>
+    <p>Uses the free <b>Scriptable</b> app. Turn phone alerts on first.</p>
+    <ol class="mini-steps">
+      <li>Install <a href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank" rel="noopener">Scriptable</a>.</li>
+      <li>Tap <b>Copy widget script</b>. In Scriptable tap <b>＋</b>, paste it, and name it <i>lockInner</i>.</li>
+      <li>Home Screen: long-press → Edit → Add Widget → Scriptable, any size. Lock Screen: long-press → Customize → Lock Screen → add Scriptable.</li>
+      <li>Long-press the widget → Edit Widget → Script: <b>lockInner</b>.</li>
+    </ol>
+    <button class="btn" id="copyWidget">Copy widget script</button>
+  </div>
+
   <div class="toggle-row">
     <div><b>Phone alerts</b><p id="phoneState">Off</p></div>
     <button class="switch" id="phoneSwitch" role="switch" aria-checked="false" aria-label="Phone alerts"><span></span></button>

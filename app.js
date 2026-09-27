@@ -362,6 +362,7 @@
         settings.refillAt = 0; save();
       }
       if (budget <= 0) syncAgain = true;
+      await publishWidget();
     } catch (err) {
       failed = true;
       console.warn('[lockInner] sync failed', err);
@@ -400,6 +401,50 @@
       settings.seen = settings.seen.concat(fresh).slice(-300);
       save();
     }
+  }
+
+  // Board snapshot for the Scriptable widget, on <topic>-w (a channel the phone doesn't subscribe to).
+  // Only republished when something visible changed, or every 6h so ntfy's 12h cache never runs dry.
+  function widgetSnapshot() {
+    const now = Date.now();
+    const active = tasks.filter(t => !t.done).sort((a, b) => a.deadlineAt - b.deadlineAt).slice(0, 8);
+    const top = active[0];
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    return {
+      v: 1, url: APP_URL,
+      dt: tasks.filter(t => t.done && t.doneAt >= startOfDay.getTime()).length,
+      line: top ? VOICE.compose(situation(top, now, 'nudge'), voiceCtx(top, now)).text : '',
+      tasks: active.map(t => {
+        const nx = nextEntry(t);
+        const o = { id: t.id, n: t.name.slice(0, 48), d: t.deadlineAt, x: nx ? nx.time : null, h: heatOf(t) };
+        if (t.streak) o.k = t.streak;
+        if (t.blocked) { o.held = 1; o.why = t.blocked.why.slice(0, 30); }
+        return o;
+      })
+    };
+  }
+  let widgetLine = { key: '', line: '' };
+  async function publishWidget() {
+    if (!settings.phone) return;
+    const snap = widgetSnapshot();
+    // Keep the voice line stable unless the top task changes, so it isn't the only thing that "changed"
+    const lineKey = snap.tasks[0] ? snap.tasks[0].id + ':' + snap.tasks[0].h : '';
+    if (widgetLine.key === lineKey && settings.widgetLine) snap.line = settings.widgetLine;
+    const sig = JSON.stringify(Object.assign({}, snap, { line: '' }));
+    const fresh = Date.now() - (settings.widgetAt || 0) < 6 * H;
+    if (sig === settings.widgetSig && fresh) return;
+    const r = await api('/', { method: 'POST', body: JSON.stringify({ topic: settings.topic + '-w', message: JSON.stringify(snap) }) });
+    if (!r.ok) throw new Error('widget ' + r.status);
+    widgetLine = { key: lineKey, line: snap.line };
+    settings.widgetSig = sig; settings.widgetAt = Date.now(); settings.widgetLine = snap.line;
+    save();
+  }
+
+  async function widgetScript() {
+    const src = await fetch('widget.js', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('widget.js ' + r.status); return r.text(); });
+    return src.replace("'__TOPIC__'", JSON.stringify(settings.topic))
+      .replace("'__SERVER__'", JSON.stringify(settings.server.replace(/\/+$/, '')))
+      .replace("'__APP_URL__'", JSON.stringify(APP_URL));
   }
 
   async function sendPing() {
@@ -784,7 +829,11 @@
     nb.textContent = n === 'granted' ? 'Enabled' : n === 'denied' ? 'Blocked in browser settings' : n === 'unsupported' ? 'Not supported here' : 'Enable';
     nb.disabled = n !== 'default';
   }
-  $('#liveBtn').addEventListener('click', () => { renderSetup(); openSheet('#setupSheet'); });
+  let widgetSrc = null;
+  $('#liveBtn').addEventListener('click', () => {
+    renderSetup(); openSheet('#setupSheet');
+    widgetScript().then(t => { widgetSrc = t; }).catch(() => {});
+  });
   $('#copyTopic').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(settings.topic); $('#copyTopic').textContent = 'Copied'; }
     catch (e) { const r = document.createRange(); r.selectNodeContents($('#topicCode')); getSelection().removeAllRanges(); getSelection().addRange(r); }
@@ -808,6 +857,20 @@
     if (on) tasks.forEach(t => t.schedule.forEach(e => { e.pushed = e.pushed && !e.fired; }));
     save(); renderSetup(); renderLive(); scheduleSync(0);
   }
+  $('#copyWidget').addEventListener('click', async () => {
+    const b = $('#copyWidget');
+    try {
+      // Safari only allows clipboard writes inside the tap, so use the prefetched copy (or a ClipboardItem promise)
+      if (widgetSrc) await navigator.clipboard.writeText(widgetSrc);
+      else if (window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({ 'text/plain': widgetScript().then(t => new Blob([t], { type: 'text/plain' })) })]);
+      else await navigator.clipboard.writeText(await widgetScript());
+      b.textContent = 'Copied ✓';
+      settings.widgetSig = ''; save(); scheduleSync(0);   // push a fresh snapshot for the widget
+    } catch (e) {
+      b.textContent = 'Copy failed, try again';
+    }
+    setTimeout(() => { b.textContent = 'Copy widget script'; }, 2200);
+  });
   $('#confirmPing').addEventListener('click', () => { $('#confirmPing').hidden = true; $('#pingTrouble').hidden = true; setPhone(true); toast('Phone alerts on. There\'s no escape now.'); });
   $('#phoneSwitch').addEventListener('click', () => setPhone(!settings.phone));
   $('#serverUrl').addEventListener('change', e => {
@@ -887,5 +950,5 @@
   });
 
   // Test hook (used by the verification script; harmless in production)
-  window.__lockinner = { get tasks() { return tasks; }, get settings() { return settings; }, sync, pollInbound, reply, checkNudges };
+  window.__lockinner = { get tasks() { return tasks; }, get settings() { return settings; }, sync, pollInbound, reply, checkNudges, widgetScript };
 })();
