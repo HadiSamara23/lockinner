@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lockInner</title>
+<meta name="description" content="Lock in on your own tasks. A slightly rude coach checks in at random times until they're done.">
+<meta name="theme-color" content="#12110F" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F4F1EA" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="sign" aria-label="lockInner"><span class="sign-arrow" aria-hidden="true">→</span>lockInner</div>
+    <div class="clock mono" id="clock" aria-hidden="true">--:--</div>
+    <button class="live" id="liveBtn" aria-label="Phone alerts settings"><span class="live-dot"></span><span id="liveText">Phone off</span></button>
+  </header>
+
+  <div class="tannoy" id="tannoy" role="status" aria-live="polite">
+    <span class="tannoy-ico" aria-hidden="true">📢</span>
+    <p class="voice" id="tannoyText">Tell me what needs doing and by when. I'll check in at random times until it's done. Politely at first.</p>
+  </div>
+
+  <section class="board" aria-labelledby="depHead">
+    <div class="board-head">
+      <h2 id="depHead">Departures</h2>
+      <span class="board-count mono" id="depCount"></span>
+    </div>
+    <div id="taskList" class="cards"></div>
+  </section>
+
+  <section class="board departed" id="departedSec" hidden>
+    <div class="board-head">
+      <h2>Departed</h2>
+      <span class="board-count mono" id="doneCount"></span>
+    </div>
+    <ul id="doneList" class="done-list"></ul>
+  </section>
+
+  <section class="board log" id="logSec" hidden>
+    <div class="board-head"><h2>Announcements</h2></div>
+    <ol id="logList" class="log-list"></ol>
+  </section>
+
+  <p class="foot voice" id="foot">Nudges land on your phone through ntfy, even with this page closed. Set it up with the button in the corner.</p>
+</div>
+
+<div class="dock">
+  <button class="btn primary big" id="addBtn"><span aria-hidden="true">＋</span> Lock something in</button>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<!-- Add task -->
+<section class="sheet" id="addSheet" role="dialog" aria-modal="true" aria-labelledby="addTitle" hidden>
+  <div class="grab" aria-hidden="true"></div>
+  <form id="addForm" autocomplete="off">
+    <h2 class="sheet-title" id="addTitle">What are you locking in?</h2>
+    <label class="field">
+      <span class="field-label">The task</span>
+      <input type="text" id="taskName" placeholder="Finish feature A, plant a tree…" maxlength="80" required enterkeyhint="next">
+    </label>
+    <div class="field">
+      <span class="field-label">Departs by</span>
+      <div class="chips" id="presetChips"></div>
+      <input type="datetime-local" id="taskDeadline" required>
+    </div>
+    <div class="field">
+      <span class="field-label">Coach attitude</span>
+      <div class="seg" id="spiceSeg" role="radiogroup" aria-label="Coach attitude">
+        <button type="button" role="radio" data-spice="1">Mild <span aria-hidden="true">🌶</span></button>
+        <button type="button" role="radio" data-spice="2">Spicy <span aria-hidden="true">🌶🌶</span></button>
+        <button type="button" role="radio" data-spice="3">Unhinged <span aria-hidden="true">🌶🌶🌶</span></button>
+      </div>
+      <p class="preview voice" id="spicePreview"></p>
+    </div>
+    <p class="form-err" id="addErr" role="alert"></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Lock it in</button>
+    </div>
+  </form>
+</section>
+
+<!-- Check-in -->
+<section class="sheet" id="checkSheet" role="dialog" aria-modal="true" aria-labelledby="checkTitle" hidden>
+  <div class="grab" aria-hidden="true"></div>
+  <p class="eyebrow mono" id="checkMeta"></p>
+  <h2 class="sheet-title" id="checkTitle"></h2>
+  <p class="voice check-q" id="checkQ"></p>
+  <div class="reply-grid" id="replyGrid">
+    <button class="reply r-onit" data-reply="onit"><b>On it</b><span>I'll back off</span></button>
+    <button class="reply r-notyet" data-reply="notyet"><b>Not yet</b><span>Ask again in ~1h</span></button>
+    <button class="reply r-blocked" data-reply="blocked"><b>Blocked</b><span>Pause nudges</span></button>
+    <button class="reply r-done" data-reply="done"><b>Done ✓</b><span>It's departed</span></button>
+  </div>
+  <form class="blocker" id="blockerForm" hidden>
+    <label class="field">
+      <span class="field-label">What's in the way?</span>
+      <input type="text" id="blockerWhy" maxlength="60" placeholder="Waiting on Sam's review…" required>
+    </label>
+    <button class="btn primary" type="submit">Pause nudges</button>
+  </form>
+  <div class="unblock" id="unblockRow" hidden>
+    <p class="voice" id="blockedWhy"></p>
+    <button class="btn primary" data-reply="unblock">Unblocked, resume</button>
+  </div>
+  <div class="manage">
+    <span class="field-label">Attitude</span>
+    <div class="seg small" id="checkSpice">
+      <button type="button" data-spice="1">Mild</button>
+      <button type="button" data-spice="2">Spicy</button>
+      <button type="button" data-spice="3">Unhinged</button>
+    </div>
+    <button class="btn ghost danger" id="removeBtn">Remove task</button>
+  </div>
+</section>
+
+<!-- Phone setup -->
+<section class="sheet tall" id="setupSheet" role="dialog" aria-modal="true" aria-labelledby="setupTitle" hidden>
+  <div class="grab" aria-hidden="true"></div>
+  <h2 class="sheet-title" id="setupTitle">Get nagged on your phone</h2>
+  <p class="voice sub">Check-ins go through <b>ntfy</b>, a free push app, so they reach you even with this page closed.</p>
+  <ol class="steps">
+    <li>
+      <b>Install ntfy</b>
+      <p>Free, no account needed.</p>
+      <a class="btn" href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">Open App Store</a>
+    </li>
+    <li>
+      <b>Subscribe to your private channel</b>
+      <p>In ntfy tap <b>＋</b>, paste this topic, and leave "Use another server" off. Anyone with this name can read your nudges, so treat it like a password.</p>
+      <div class="topic"><code class="mono" id="topicCode"></code><button class="btn" id="copyTopic">Copy</button></div>
+    </li>
+    <li>
+      <b>Ping yourself</b>
+      <p id="pingHint">Sends one test notification right now.</p>
+      <div class="row">
+        <button class="btn" id="pingBtn">Send test ping</button>
+        <button class="btn primary" id="confirmPing" hidden>It buzzed, turn on</button>
+      </div>
+      <p class="trouble" id="pingTrouble" hidden>Nothing arrived? In iOS Settings → Notifications → ntfy, allow notifications. Also check that Focus isn't silencing it and that the topic matches exactly.</p>
+    </li>
+  </ol>
+
+  <div class="toggle-row">
+    <div><b>Phone alerts</b><p id="phoneState">Off</p></div>
+    <button class="switch" id="phoneSwitch" role="switch" aria-checked="false" aria-label="Phone alerts"><span></span></button>
+  </div>
+
+  <div class="note-box">
+    <b>On iPhone, keep lockInner in Safari</b> as a tab or bookmark. Don't use "Add to Home Screen": iOS gives home-screen apps separate storage, and notification links open in Safari.
+  </div>
+
+  <details class="adv">
+    <summary>More settings</summary>
+    <div class="adv-body">
+      <div class="field">
+        <span class="field-label">Theme</span>
+        <div class="seg small" id="themeSeg">
+          <button type="button" data-theme="auto">Auto</button>
+          <button type="button" data-theme="light">Light</button>
+          <button type="button" data-theme="dark">Dark</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">Browser notifications (only while this tab is open)</span>
+        <button class="btn" id="browserNotifBtn">Enable</button>
+      </div>
+      <label class="field">
+        <span class="field-label">ntfy server (change only while phone alerts are off)</span>
+        <input type="url" id="serverUrl" class="mono" spellcheck="false">
+      </label>
+      <div class="field">
+        <span class="field-label">Backup</span>
+        <div class="row">
+          <button class="btn" id="exportBtn">Export</button>
+          <label class="btn">Import<input type="file" id="importFile" accept="application/json" hidden></label>
+        </div>
+      </div>
+    </div>
+  </details>
+  <div class="sheet-actions"><button class="btn primary" data-close>Done</button></div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="fx" id="fx" aria-hidden="true"></div>
+
+<script src="phrases.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
